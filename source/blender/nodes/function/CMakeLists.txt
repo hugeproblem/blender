@@ -12,6 +12,7 @@ set(INC
   ../../functions
   ../../makesrna
   ../../windowmanager
+  PRIVATE ../../../../extern/exprtk
 )
 
 set(INC_SYS
