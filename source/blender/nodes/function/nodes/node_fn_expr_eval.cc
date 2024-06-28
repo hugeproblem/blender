@@ -86,7 +86,6 @@ private:
     }
     lock_.unlock_shared();
 
-    lock_.lock();
     auto evaluator = std::make_unique<Evaluator>();
     auto &ref = *evaluator;
     if (is_valid_) {
@@ -100,6 +99,7 @@ private:
       is_valid_ = parser.compile(expression_, ref.expr);
     }
 
+    lock_.lock();
     evaluators_[std::this_thread::get_id()] = std::move(evaluator);
     lock_.unlock();
     return ref;
