@@ -7,6 +7,11 @@
 #include "UI_resources.hh"
 #include "exprtk.hpp"
 
+#include <memory>
+#include <shared_mutex>
+#include <thread>
+#include <unordered_map>
+
 namespace blender::nodes::node_fn_expr_eval_cc {
 
 NODE_STORAGE_FUNCS(NodeExprEval)
@@ -60,26 +65,53 @@ public:
   using Type = float;
   
 private:
-  exprtk::expression<Type>   expr_;
-  exprtk::symbol_table<Type> vars_;
-  bool is_valid_ = false;
-  mutable Type a = 0, b = 0, c = 0, d = 0;
+  std::string expression_ = "";
+
+  struct Evaluator
+  {
+    exprtk::expression<Type> expr;
+    exprtk::symbol_table<Type> vars;
+    float a, b, c, d;
+  };
+  mutable bool is_valid_ = true;
+  mutable std::unordered_map<std::thread::id, std::unique_ptr<Evaluator>> evaluators_;
+  mutable std::shared_mutex lock_;
+
+  Evaluator& getThreadLocalEvaluator() const
+  {
+    lock_.lock_shared();
+    if (auto itr = evaluators_.find(std::this_thread::get_id()); itr != evaluators_.end()) {
+      lock_.unlock_shared();
+      return *itr->second;
+    }
+    lock_.unlock_shared();
+
+    lock_.lock();
+    auto evaluator = std::make_unique<Evaluator>();
+    auto &ref = *evaluator;
+    if (is_valid_) {
+      ref.vars.add_constants();
+      ref.vars.add_variable("a", ref.a);
+      ref.vars.add_variable("b", ref.b);
+      ref.vars.add_variable("c", ref.c);
+      ref.vars.add_variable("d", ref.d);
+      ref.expr.register_symbol_table(ref.vars);
+      exprtk::parser<Type> parser;
+      is_valid_ = parser.compile(expression_, ref.expr);
+    }
+
+    evaluators_[std::this_thread::get_id()] = std::move(evaluator);
+    lock_.unlock();
+    return ref;
+  }
 
 public:
   ExprtkEvaluator(char const* expr_str)
   {
-    vars_.add_constants();
-    vars_.add_variable("a", a);
-    vars_.add_variable("b", b);
-    vars_.add_variable("c", c);
-    vars_.add_variable("d", d);
-    expr_.register_symbol_table(vars_);
-
-    exprtk::parser<Type> parser;
     if (expr_str)
-      is_valid_ = parser.compile(expr_str, expr_);
+      expression_ = expr_str;
     else
-      is_valid_ = false;
+      expression_ = "";
 
     static const mf::Signature signature = []() {
       mf::Signature signature;
@@ -102,13 +134,14 @@ public:
     const VArray<float> &input_ds = params.readonly_single_input<float>(3, "d");
 
     auto results = params.uninitialized_single_output<float>(4, "result");
+    auto &evaluator = getThreadLocalEvaluator();
 
     mask.foreach_index([&](const int i) {
-      a = input_as[i];
-      b = input_bs[i];
-      c = input_cs[i];
-      d = input_ds[i];
-      results[i] = expr_.value();
+      evaluator.a = input_as[i];
+      evaluator.b = input_bs[i];
+      evaluator.c = input_cs[i];
+      evaluator.d = input_ds[i];
+      results[i] = evaluator.expr.value();
     });
   }
 
