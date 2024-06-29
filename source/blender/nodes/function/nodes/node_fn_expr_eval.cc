@@ -5,6 +5,10 @@
 #include "node_function_util.hh"
 #include "UI_interface.hh"
 #include "UI_resources.hh"
+
+#define exprtk_disable_rtl_vecops
+#define exprtk_disable_rtl_io
+#define exprtk_disable_rtl_io_file
 #include "exprtk.hpp"
 
 #include <memory>
