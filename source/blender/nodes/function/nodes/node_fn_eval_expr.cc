@@ -4,6 +4,9 @@
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
+
+#include "NOD_node_extra_info.hh"
+
 #include "node_function_util.hh"
 
 #define exprtk_disable_rtl_vecops
@@ -64,15 +67,15 @@ static void node_layout(uiLayout *layout, bContext *, PointerRNA *ptr)
 
 class MF_ExprtkEvaluator : public mf::MultiFunction {
  public:
-  using Type = float;
+  using ValueType = float;
 
  private:
   std::string expression_ = "";
 
   struct ThreadLocalEvaluator {
-    exprtk::expression<Type> expr;
-    exprtk::symbol_table<Type> vars;
-    float a, b, c, d;
+    exprtk::expression<ValueType> expr;
+    exprtk::symbol_table<ValueType> vars;
+    ValueType a, b, c, d;
   };
   mutable bool is_valid_ = true;
   mutable std::unordered_map<std::thread::id, std::unique_ptr<ThreadLocalEvaluator>> evaluators_;
@@ -98,7 +101,7 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
       ref.vars.add_variable("c", ref.c);
       ref.vars.add_variable("d", ref.d);
       ref.expr.register_symbol_table(ref.vars);
-      exprtk::parser<Type> parser;
+      exprtk::parser<ValueType> parser;
       is_valid_ = parser.compile(expression_, ref.expr);
     }
 
@@ -119,11 +122,11 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
     static const mf::Signature signature = []() {
       mf::Signature signature;
       mf::SignatureBuilder builder{"Expression Evaluator", signature};
-      builder.single_input<Type>("A");
-      builder.single_input<Type>("B");
-      builder.single_input<Type>("C");
-      builder.single_input<Type>("D");
-      builder.single_output<Type>("Result");
+      builder.single_input<ValueType>("A");
+      builder.single_input<ValueType>("B");
+      builder.single_input<ValueType>("C");
+      builder.single_input<ValueType>("D");
+      builder.single_output<ValueType>("Result");
       return signature;
     }();
     this->set_signature(&signature);
@@ -139,13 +142,20 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
     auto results = params.uninitialized_single_output<float>(4, "Result");
     auto &evaluator = getThreadLocalEvaluator();
 
-    mask.foreach_index([&](const int i) {
-      evaluator.a = input_as[i];
-      evaluator.b = input_bs[i];
-      evaluator.c = input_cs[i];
-      evaluator.d = input_ds[i];
-      results[i] = evaluator.expr.value();
-    });
+    if (is_valid_) {
+      mask.foreach_index([&](const int i) {
+        evaluator.a = input_as[i];
+        evaluator.b = input_bs[i];
+        evaluator.c = input_cs[i];
+        evaluator.d = input_ds[i];
+        results[i] = evaluator.expr.value();
+      });
+    }
+    else {
+      mask.foreach_index([&](const int i) {
+        results[i] = 0;
+      });
+    }
   }
 
   ExecutionHints get_execution_hints() const override
@@ -156,10 +166,43 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
   }
 };
 
+static bool test_compile(char const* expression, std::string* out_error)
+{
+  exprtk::expression<float> expr;
+  exprtk::symbol_table<float> vars;
+  float a, b, c, d;
+
+  vars.add_constants();
+  vars.add_variable("a", a);
+  vars.add_variable("b", b);
+  vars.add_variable("c", c);
+  vars.add_variable("d", d);
+  expr.register_symbol_table(vars);
+  exprtk::parser<float> parser;
+  bool valid = parser.compile(expression, expr);
+  if (valid && out_error)
+    *out_error = parser.error();
+  return valid;
+}
+
+static void node_extra_info(NodeExtraInfoParams &params)
+{
+  char const* expression = node_storage(params.node).expression;
+  std::string error_message;
+  if (!expression || !test_compile(expression, &error_message)) {
+    NodeExtraInfoRow row;
+    row.text = RPT_("Invalid Expression");
+    row.tooltip = TIP_("Cannot evaluate this, result will be 0");
+    row.icon = ICON_ERROR;
+    params.rows.append(std::move(row));
+  }
+}
+
 static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
   const bNode &node = builder.node();
-  builder.construct_and_set_matching_fn<MF_ExprtkEvaluator>(node_storage(node).expression);
+  char const* expression = node_storage(node).expression;
+  builder.construct_and_set_matching_fn<MF_ExprtkEvaluator>(expression);
 }
 
 static void node_register()
@@ -173,6 +216,7 @@ static void node_register()
       &ntype, "NodeEvalExpression", node_storage_free, node_storage_copy);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
+  ntype.get_extra_info = node_extra_info;
   blender::bke::nodeRegisterType(&ntype);
 }
 NOD_REGISTER_NODE(node_register);
