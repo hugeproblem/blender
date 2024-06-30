@@ -16,7 +16,7 @@
 #include <thread>
 #include <unordered_map>
 
-namespace blender::nodes::node_fn_expr_eval_cc {
+namespace blender::nodes::node_fn_eval_expr_cc {
 
 NODE_STORAGE_FUNCS(NodeEvalExpression)
 
@@ -59,36 +59,36 @@ static void node_storage_copy(bNodeTree *, bNode *dst, const bNode *src)
 
 static void node_layout(uiLayout *layout, bContext *, PointerRNA *ptr)
 {
-  // uiLayout *col = uiLayoutColumn(layout, true);
   uiItemR(layout, ptr, "expression", UI_ITEM_NONE, "", ICON_NONE);
 }
 
-class ExprtkEvaluator : public mf::MultiFunction {
+class MF_ExprtkEvaluator : public mf::MultiFunction {
  public:
   using Type = float;
 
  private:
   std::string expression_ = "";
 
-  struct Evaluator {
+  struct ThreadLocalEvaluator {
     exprtk::expression<Type> expr;
     exprtk::symbol_table<Type> vars;
     float a, b, c, d;
   };
   mutable bool is_valid_ = true;
-  mutable std::unordered_map<std::thread::id, std::unique_ptr<Evaluator>> evaluators_;
+  mutable std::unordered_map<std::thread::id, std::unique_ptr<ThreadLocalEvaluator>> evaluators_;
   mutable std::shared_mutex lock_;
 
-  Evaluator &getThreadLocalEvaluator() const
+  ThreadLocalEvaluator &getThreadLocalEvaluator() const
   {
     lock_.lock_shared();
-    if (auto itr = evaluators_.find(std::this_thread::get_id()); itr != evaluators_.end()) {
+    auto existing_evaluator_iterator = evaluators_.find(std::this_thread::get_id());
+    if (existing_evaluator_iterator != evaluators_.end()) {
       lock_.unlock_shared();
-      return *itr->second;
+      return *existing_evaluator_iterator->second;
     }
     lock_.unlock_shared();
 
-    auto evaluator = std::make_unique<Evaluator>();
+    auto evaluator = std::make_unique<ThreadLocalEvaluator>();
     auto &ref = *evaluator;
     if (is_valid_) {
       ref.vars.add_constants();
@@ -108,7 +108,7 @@ class ExprtkEvaluator : public mf::MultiFunction {
   }
 
  public:
-  ExprtkEvaluator(char const *expr_str)
+  MF_ExprtkEvaluator(char const *expr_str)
   {
     if (expr_str)
       expression_ = expr_str;
@@ -158,7 +158,7 @@ class ExprtkEvaluator : public mf::MultiFunction {
 static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
   const bNode &node = builder.node();
-  builder.construct_and_set_matching_fn<ExprtkEvaluator>(node_storage(node).expression);
+  builder.construct_and_set_matching_fn<MF_ExprtkEvaluator>(node_storage(node).expression);
 }
 
 static void node_register()
@@ -176,4 +176,4 @@ static void node_register()
 }
 NOD_REGISTER_NODE(node_register);
 
-}  // namespace blender::nodes::node_fn_expr_eval_cc
+}  // namespace blender::nodes::node_fn_eval_expr_cc
