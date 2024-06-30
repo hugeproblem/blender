@@ -846,8 +846,8 @@ void ntreeBlendWrite(BlendWriter *writer, bNodeTree *ntree)
         }
         BLO_write_struct_by_name(writer, node->typeinfo->storagename, storage);
       }
-      else if (node->type == FN_NODE_EXPR_EVALUATE) {
-        NodeExprEval *storage = static_cast<NodeExprEval*>(node->storage);
+      else if (node->type == FN_NODE_EVAL_EXPRESSION) {
+        NodeEvalExpression *storage = static_cast<NodeEvalExpression*>(node->storage);
         if (storage->expression) {
           BLO_write_string(writer, storage->expression);
         }
@@ -1165,8 +1165,8 @@ void ntreeBlendReadData(BlendDataReader *reader, ID *owner_id, bNodeTree *ntree)
           BLO_read_string(reader, &storage->string);
           break;
         }
-        case FN_NODE_EXPR_EVALUATE: {
-          NodeExprEval *storage = static_cast<NodeExprEval *>(node->storage);
+        case FN_NODE_EVAL_EXPRESSION: {
+          NodeEvalExpression *storage = static_cast<NodeEvalExpression *>(node->storage);
           BLO_read_string(reader, &storage->expression);
           break;
         }

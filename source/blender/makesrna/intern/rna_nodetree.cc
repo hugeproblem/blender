@@ -4596,7 +4596,7 @@ static void def_fn_eval_expression(StructRNA *srna)
 {
   PropertyRNA *prop;
 
-  RNA_def_struct_sdna_from(srna, "NodeExprEval", "storage");
+  RNA_def_struct_sdna_from(srna, "NodeEvalExpression", "storage");
 
   prop = RNA_def_property(srna, "expression", PROP_STRING, PROP_NONE);
   RNA_def_property_ui_text(prop, "Expression", "");

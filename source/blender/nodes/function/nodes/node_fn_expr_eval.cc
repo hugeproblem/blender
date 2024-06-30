@@ -18,7 +18,7 @@
 
 namespace blender::nodes::node_fn_expr_eval_cc {
 
-NODE_STORAGE_FUNCS(NodeExprEval)
+NODE_STORAGE_FUNCS(NodeEvalExpression)
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
@@ -32,12 +32,12 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_init(bNodeTree*, bNode* node)
 {
-  node->storage = MEM_callocN(sizeof(NodeExprEval), __func__);
+  node->storage = MEM_callocN(sizeof(NodeEvalExpression), __func__);
 }
 
 static void node_storage_free(bNode* node)
 {
-  NodeExprEval* storage = (NodeExprEval*)node->storage;
+  NodeEvalExpression* storage = (NodeEvalExpression*)node->storage;
   if (storage == nullptr)
     return;
   if (storage->expression != nullptr)
@@ -47,8 +47,8 @@ static void node_storage_free(bNode* node)
 
 static void node_storage_copy(bNodeTree*, bNode* dst, const bNode* src)
 {
-  auto* storage = (NodeExprEval*)src->storage;
-  auto* cpy = (NodeExprEval*)MEM_dupallocN(storage);
+  auto* storage = (NodeEvalExpression*)src->storage;
+  auto* cpy = (NodeEvalExpression*)MEM_dupallocN(storage);
 
   if (storage->expression) {
     cpy->expression = (char*)MEM_dupallocN(storage->expression);
@@ -160,10 +160,6 @@ public:
 static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
   const bNode &node = builder.node();
-  //static auto fn = mf::build::SI4_SO<float, float, float, float, float>("Eval Expr", [](float a, float b, float c, float d){
-  //    return a+b;
-  //  });
-  //builder.set_matching_fn(fn);
   builder.construct_and_set_matching_fn<ExprtkEvaluator>(node_storage(node).expression);
 }
 
@@ -171,10 +167,10 @@ static void node_register()
 {
   static blender::bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, FN_NODE_EXPR_EVALUATE, "Expression", NODE_CLASS_CONVERTER);
+  fn_node_type_base(&ntype, FN_NODE_EVAL_EXPRESSION, "Expression", NODE_CLASS_CONVERTER);
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
-  blender::bke::node_type_storage(&ntype, "NodeExprEval", node_storage_free, node_storage_copy);
+  blender::bke::node_type_storage(&ntype, "NodeEvalExpression", node_storage_free, node_storage_copy);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
   blender::bke::nodeRegisterType(&ntype);

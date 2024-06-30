@@ -2907,7 +2907,7 @@ typedef enum NodeGeometryTransformMode {
   GEO_NODE_TRANSFORM_MODE_MATRIX = 1,
 } NodeGeometryTransformMode;
 
-typedef struct NodeExprEval {
+typedef struct NodeEvalExpression {
   char *expression;
-} NodeExprEval;
+} NodeEvalExpression;
 
