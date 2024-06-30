@@ -23,11 +23,11 @@ NODE_STORAGE_FUNCS(NodeEvalExpression)
 static void node_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
-  b.add_input<decl::Float>("a");
-  b.add_input<decl::Float>("b");
-  b.add_input<decl::Float>("c");
-  b.add_input<decl::Float>("d");
-  b.add_output<decl::Float>("result");
+  b.add_input<decl::Float>("A");
+  b.add_input<decl::Float>("B");
+  b.add_input<decl::Float>("C");
+  b.add_input<decl::Float>("D");
+  b.add_output<decl::Float>("Result");
 }
 
 static void node_init(bNodeTree *, bNode *node)
@@ -92,6 +92,7 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
     auto &ref = *evaluator;
     if (is_valid_) {
       ref.vars.add_constants();
+      // exprtk is case-insensitive, `A` is the same variable as `a`
       ref.vars.add_variable("a", ref.a);
       ref.vars.add_variable("b", ref.b);
       ref.vars.add_variable("c", ref.c);
@@ -118,11 +119,11 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
     static const mf::Signature signature = []() {
       mf::Signature signature;
       mf::SignatureBuilder builder{"Expression Evaluator", signature};
-      builder.single_input<Type>("a");
-      builder.single_input<Type>("b");
-      builder.single_input<Type>("c");
-      builder.single_input<Type>("d");
-      builder.single_output<Type>("result");
+      builder.single_input<Type>("A");
+      builder.single_input<Type>("B");
+      builder.single_input<Type>("C");
+      builder.single_input<Type>("D");
+      builder.single_output<Type>("Result");
       return signature;
     }();
     this->set_signature(&signature);
@@ -130,12 +131,12 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
 
   void call(const IndexMask &mask, mf::Params params, mf::Context /*context*/) const override
   {
-    const VArray<float> &input_as = params.readonly_single_input<float>(0, "a");
-    const VArray<float> &input_bs = params.readonly_single_input<float>(1, "b");
-    const VArray<float> &input_cs = params.readonly_single_input<float>(2, "c");
-    const VArray<float> &input_ds = params.readonly_single_input<float>(3, "d");
+    const VArray<float> &input_as = params.readonly_single_input<float>(0, "A");
+    const VArray<float> &input_bs = params.readonly_single_input<float>(1, "B");
+    const VArray<float> &input_cs = params.readonly_single_input<float>(2, "C");
+    const VArray<float> &input_ds = params.readonly_single_input<float>(3, "D");
 
-    auto results = params.uninitialized_single_output<float>(4, "result");
+    auto results = params.uninitialized_single_output<float>(4, "Result");
     auto &evaluator = getThreadLocalEvaluator();
 
     mask.foreach_index([&](const int i) {
