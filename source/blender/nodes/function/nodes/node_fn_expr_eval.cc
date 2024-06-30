@@ -2,9 +2,9 @@
  * Author: iiif
  * License: GPL-2.0-or-later */
 
-#include "node_function_util.hh"
 #include "UI_interface.hh"
 #include "UI_resources.hh"
+#include "node_function_util.hh"
 
 #define exprtk_disable_rtl_vecops
 #define exprtk_disable_rtl_io
@@ -30,14 +30,14 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Float>("result");
 }
 
-static void node_init(bNodeTree*, bNode* node)
+static void node_init(bNodeTree *, bNode *node)
 {
   node->storage = MEM_callocN(sizeof(NodeEvalExpression), __func__);
 }
 
-static void node_storage_free(bNode* node)
+static void node_storage_free(bNode *node)
 {
-  NodeEvalExpression* storage = (NodeEvalExpression*)node->storage;
+  NodeEvalExpression *storage = (NodeEvalExpression *)node->storage;
   if (storage == nullptr)
     return;
   if (storage->expression != nullptr)
@@ -45,34 +45,32 @@ static void node_storage_free(bNode* node)
   MEM_freeN(storage);
 }
 
-static void node_storage_copy(bNodeTree*, bNode* dst, const bNode* src)
+static void node_storage_copy(bNodeTree *, bNode *dst, const bNode *src)
 {
-  auto* storage = (NodeEvalExpression*)src->storage;
-  auto* cpy = (NodeEvalExpression*)MEM_dupallocN(storage);
+  auto *storage = (NodeEvalExpression *)src->storage;
+  auto *cpy = (NodeEvalExpression *)MEM_dupallocN(storage);
 
   if (storage->expression) {
-    cpy->expression = (char*)MEM_dupallocN(storage->expression);
+    cpy->expression = (char *)MEM_dupallocN(storage->expression);
   }
 
   dst->storage = cpy;
 }
 
-static void node_layout(uiLayout *layout, bContext*, PointerRNA *ptr)
+static void node_layout(uiLayout *layout, bContext *, PointerRNA *ptr)
 {
-  //uiLayout *col = uiLayoutColumn(layout, true);
+  // uiLayout *col = uiLayoutColumn(layout, true);
   uiItemR(layout, ptr, "expression", UI_ITEM_NONE, "", ICON_NONE);
 }
 
-class ExprtkEvaluator : public mf::MultiFunction
-{
-public:
+class ExprtkEvaluator : public mf::MultiFunction {
+ public:
   using Type = float;
-  
-private:
+
+ private:
   std::string expression_ = "";
 
-  struct Evaluator
-  {
+  struct Evaluator {
     exprtk::expression<Type> expr;
     exprtk::symbol_table<Type> vars;
     float a, b, c, d;
@@ -81,7 +79,7 @@ private:
   mutable std::unordered_map<std::thread::id, std::unique_ptr<Evaluator>> evaluators_;
   mutable std::shared_mutex lock_;
 
-  Evaluator& getThreadLocalEvaluator() const
+  Evaluator &getThreadLocalEvaluator() const
   {
     lock_.lock_shared();
     if (auto itr = evaluators_.find(std::this_thread::get_id()); itr != evaluators_.end()) {
@@ -109,8 +107,8 @@ private:
     return ref;
   }
 
-public:
-  ExprtkEvaluator(char const* expr_str)
+ public:
+  ExprtkEvaluator(char const *expr_str)
   {
     if (expr_str)
       expression_ = expr_str;
@@ -170,11 +168,12 @@ static void node_register()
   fn_node_type_base(&ntype, FN_NODE_EVAL_EXPRESSION, "Expression", NODE_CLASS_CONVERTER);
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
-  blender::bke::node_type_storage(&ntype, "NodeEvalExpression", node_storage_free, node_storage_copy);
+  blender::bke::node_type_storage(
+      &ntype, "NodeEvalExpression", node_storage_free, node_storage_copy);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
   blender::bke::nodeRegisterType(&ntype);
 }
 NOD_REGISTER_NODE(node_register);
 
-} // namespace blender::nodes::node_fn_expr_eval_cc
+}  // namespace blender::nodes::node_fn_expr_eval_cc
