@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <shared_mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
@@ -33,13 +34,97 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Float>("Result");
 }
 
+static bool test_compile(char const *expression, std::string *out_error)
+{
+  if (!expression) {
+    if (out_error)
+      *out_error = "empty expression";
+    return false;
+  }
+  exprtk::expression<float> expr;
+  exprtk::symbol_table<float> vars;
+  float a, b, c, d;
+
+  vars.add_constants();
+  vars.add_variable("a", a);
+  vars.add_variable("b", b);
+  vars.add_variable("c", c);
+  vars.add_variable("d", d);
+  expr.register_symbol_table(vars);
+  exprtk::parser<float> parser;
+  bool valid = parser.compile(expression, expr);
+  if (!valid && out_error)
+    *out_error = parser.error();
+  return valid;
+}
+
+class EvalExprNodeExtraInfoCache
+{
+ public:
+   struct CompileResult {
+     bool succeed;
+     std::string message;
+   };
+ private:
+   std::unordered_map<bNode const *, std::unique_ptr<CompileResult>> compile_results_;
+
+   EvalExprNodeExtraInfoCache() = default;
+   EvalExprNodeExtraInfoCache(EvalExprNodeExtraInfoCache const &) = delete;
+
+ public:
+   static EvalExprNodeExtraInfoCache &instance();
+
+   void addNode(bNode const *node)
+   {
+     compile_results_[node] = nullptr;
+   }
+   void updateNode(bNode const *node)
+   {
+     CompileResult *result_ptr = compile_results_[node].get();
+     if (!result_ptr) {
+       auto result_uniqueptr = std::make_unique<CompileResult>();
+       result_ptr = result_uniqueptr.get();
+       compile_results_[node] = std::move(result_uniqueptr);
+     }
+     result_ptr->succeed = test_compile(node_storage(*node).expression, &result_ptr->message);
+   }
+   bool getNodeExtraInfo(bNode const *node, bool& compile_succeed, char const*& message) const
+   {
+     auto compile_result_iter = compile_results_.find(node);
+     if (compile_result_iter == compile_results_.end()) {
+       compile_succeed = false;
+       message = "node info not found in cache";
+       return false;
+     }
+     else {
+       compile_succeed = compile_result_iter->second->succeed;
+       message = compile_result_iter->second->message.c_str();
+       return true;
+     }
+   }
+   void removeNode(bNode const *node)
+   {
+     compile_results_.erase(node);
+   }
+};
+
+EvalExprNodeExtraInfoCache& EvalExprNodeExtraInfoCache::instance()
+{
+  static EvalExprNodeExtraInfoCache the_instance;
+  return the_instance;
+}
+
 static void node_init(bNodeTree *, bNode *node)
 {
   node->storage = MEM_callocN(sizeof(NodeEvalExpression), __func__);
+
+  EvalExprNodeExtraInfoCache::instance().addNode(node);
 }
 
-static void node_storage_free(bNode *node)
+static void node_free(bNode *node)
 {
+  EvalExprNodeExtraInfoCache::instance().removeNode(node);
+
   NodeEvalExpression *storage = (NodeEvalExpression *)node->storage;
   if (storage == nullptr)
     return;
@@ -48,7 +133,7 @@ static void node_storage_free(bNode *node)
   MEM_freeN(storage);
 }
 
-static void node_storage_copy(bNodeTree *, bNode *dst, const bNode *src)
+static void node_copy(bNodeTree *, bNode *dst, const bNode *src)
 {
   auto *storage = (NodeEvalExpression *)src->storage;
   auto *cpy = (NodeEvalExpression *)MEM_dupallocN(storage);
@@ -58,11 +143,35 @@ static void node_storage_copy(bNodeTree *, bNode *dst, const bNode *src)
   }
 
   dst->storage = cpy;
+
+  EvalExprNodeExtraInfoCache::instance().updateNode(dst);
+}
+
+static void node_update(bNodeTree *, bNode *node)
+{
+  EvalExprNodeExtraInfoCache::instance().updateNode(node);
 }
 
 static void node_layout(uiLayout *layout, bContext *, PointerRNA *ptr)
 {
   uiItemR(layout, ptr, "expression", UI_ITEM_NONE, "", ICON_NONE);
+}
+
+static void node_extra_info(NodeExtraInfoParams &params)
+{
+  bool succeed = false;
+  char const *message = nullptr;
+  bool has_extra_info = EvalExprNodeExtraInfoCache::instance().getNodeExtraInfo(&params.node, succeed, message);
+  if (has_extra_info && !succeed) {
+    NodeExtraInfoRow row;
+    row.text = RPT_("Invalid Expression");
+    if (message)
+      row.tooltip = message;
+    else
+      row.tooltip = TIP_("Cannot evaluate this, result will be 0");
+    row.icon = ICON_ERROR;
+    params.rows.append(std::move(row));
+  }
 }
 
 class MF_ExprtkEvaluator : public mf::MultiFunction {
@@ -166,38 +275,6 @@ class MF_ExprtkEvaluator : public mf::MultiFunction {
   }
 };
 
-static bool test_compile(char const* expression, std::string* out_error)
-{
-  exprtk::expression<float> expr;
-  exprtk::symbol_table<float> vars;
-  float a, b, c, d;
-
-  vars.add_constants();
-  vars.add_variable("a", a);
-  vars.add_variable("b", b);
-  vars.add_variable("c", c);
-  vars.add_variable("d", d);
-  expr.register_symbol_table(vars);
-  exprtk::parser<float> parser;
-  bool valid = parser.compile(expression, expr);
-  if (valid && out_error)
-    *out_error = parser.error();
-  return valid;
-}
-
-static void node_extra_info(NodeExtraInfoParams &params)
-{
-  char const* expression = node_storage(params.node).expression;
-  std::string error_message;
-  if (!expression || !test_compile(expression, &error_message)) {
-    NodeExtraInfoRow row;
-    row.text = RPT_("Invalid Expression");
-    row.tooltip = TIP_("Cannot evaluate this, result will be 0");
-    row.icon = ICON_ERROR;
-    params.rows.append(std::move(row));
-  }
-}
-
 static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
   const bNode &node = builder.node();
@@ -212,8 +289,9 @@ static void node_register()
   fn_node_type_base(&ntype, FN_NODE_EVAL_EXPRESSION, "Expression", NODE_CLASS_CONVERTER);
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
+  ntype.updatefunc = node_update;
   blender::bke::node_type_storage(
-      &ntype, "NodeEvalExpression", node_storage_free, node_storage_copy);
+      &ntype, "NodeEvalExpression", node_free, node_copy);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
   ntype.get_extra_info = node_extra_info;
