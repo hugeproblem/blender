@@ -38,7 +38,7 @@ static bool test_compile(char const *expression, std::string *out_error)
 {
   if (!expression) {
     if (out_error)
-      *out_error = "empty expression";
+      *out_error = "ERROR: Empty expression.";
     return false;
   }
   exprtk::expression<float> expr;
@@ -93,7 +93,7 @@ class EvalExprNodeExtraInfoCache
      auto compile_result_iter = compile_results_.find(node);
      if (compile_result_iter == compile_results_.end()) {
        compile_succeed = false;
-       message = "node info not found in cache";
+       message = "ERROR: Node info not found.";
        return false;
      }
      else {
