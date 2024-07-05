@@ -34,6 +34,7 @@ from bpy.props import (
 )
 from bpy.app.translations import (
     pgettext_iface as iface_,
+    pgettext_tip as tip_,
     pgettext_rpt as rpt_,
 
 )
@@ -497,6 +498,9 @@ def repo_cache_store_refresh_from_prefs(repo_cache_store, include_disabled=False
         repos.append((directory, remote_url))
 
     repo_cache_store.refresh_from_repos(repos=repos)
+    # Return the repository directory & URL's as it can be useful to know which repositories are now available.
+    # NOTE: it might be better to return a list of `RepoItem`, for now it's not needed.
+    return repos
 
 
 def _preferences_ensure_disabled(*, repo_item, pkg_id_sequence, default_set):
@@ -1396,7 +1400,7 @@ class EXTENSIONS_OT_repo_sync_all(Operator, _ExtCmdMixIn):
     @classmethod
     def description(cls, _context, props):
         if props.use_active_only:
-            return "Refresh the list of extensions for the active repository"
+            return tip_("Refresh the list of extensions for the active repository")
         return ""  # Default.
 
     def exec_command_iter(self, is_modal):
@@ -1593,7 +1597,7 @@ class EXTENSIONS_OT_package_upgrade_all(Operator, _ExtCmdMixIn):
     @classmethod
     def description(cls, _context, props):
         if props.use_active_only:
-            return "Upgrade all the extensions to their latest version for the active repository"
+            return tip_("Upgrade all the extensions to their latest version for the active repository")
         return ""  # Default.
 
     def exec_command_iter(self, is_modal):
@@ -2809,15 +2813,16 @@ class EXTENSIONS_OT_package_install(Operator, _ExtCmdMixIn):
                 return False
 
         if item_local is not None:
+            if item_local.type == "add-on":
+                message = rpt_("Add-on \"{:s}\" already installed!")
+            elif item_local.type == "theme":
+                message = rpt_("Theme \"{:s}\" already installed!")
+            else:
+                assert False, "Unreachable"
             self._draw_override = (
                 self._draw_override_errors,
                 {
-                    "errors": [
-                        iface_("{:s} \"{:s}\" already installed!").format(
-                            iface_(string.capwords(item_local.type)),
-                            item_local.name,
-                        )
-                    ]
+                    "errors": [message.format(item_local.name)]
                 }
             )
             return False
@@ -2986,7 +2991,7 @@ class EXTENSIONS_OT_package_uninstall_system(Operator):
 
     @classmethod
     def description(cls, _context, _props):
-        return EXTENSIONS_OT_package_uninstall.__doc__
+        return tip_(EXTENSIONS_OT_package_uninstall.__doc__)
 
     def execute(self, _context):
         return {'CANCELLED'}
@@ -3301,6 +3306,45 @@ class EXTENSIONS_OT_repo_unlock(Operator):
         return {'FINISHED'}
 
 
+class EXTENSIONS_OT_userpref_tags_set(Operator):
+    """Set the value of all tags"""
+    bl_idname = "extensions.userpref_tags_set"
+    bl_label = "Set Extension Tags"
+    bl_options = {'INTERNAL'}
+
+    value: BoolProperty(
+        name="Value",
+        description="Enable or disable all tags",
+        options={'SKIP_SAVE'},
+    )
+    data_path: StringProperty(
+        name="Data Path",
+        options={'SKIP_SAVE'},
+    )
+
+    def execute(self, context):
+        from .bl_extension_ui import (
+            tags_clear,
+            tags_refresh,
+        )
+
+        wm = context.window_manager
+
+        value = self.value
+        tags_attr = self.data_path
+
+        # Internal error, could happen if called from some unexpected place.
+        if tags_attr not in {"extension_tags", "addon_tags"}:
+            return {'CANCELLED'}
+
+        tags_clear(wm, tags_attr)
+        if self.value is False:
+            tags_refresh(wm, tags_attr, default_value=False)
+
+        _preferences_ui_redraw()
+        return {'FINISHED'}
+
+
 # NOTE: this is a modified version of `PREFERENCES_OT_addon_show`.
 # It would make most sense to extend this operator to support showing extensions to upgrade (eventually).
 class EXTENSIONS_OT_userpref_show_for_update(Operator):
@@ -3310,6 +3354,8 @@ class EXTENSIONS_OT_userpref_show_for_update(Operator):
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
+        from .bl_extension_ui import tags_clear
+
         wm = context.window_manager
         prefs = context.preferences
 
@@ -3318,6 +3364,10 @@ class EXTENSIONS_OT_userpref_show_for_update(Operator):
         # Show only extensions that will be updated.
         wm.extension_show_panel_installed = True
         wm.extension_show_panel_available = False
+
+        # Clear other filtering option.
+        wm.extension_search = ""
+        tags_clear(wm, "extension_tags")
 
         bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
 
@@ -3400,18 +3450,18 @@ class EXTENSIONS_OT_userpref_allow_online_popup(Operator):
         col = layout.column()
         if bpy.app.online_access_override:
             lines = (
-                "Online access required to install or update.",
+                rpt_("Online access required to install or update."),
                 "",
-                "Launch Blender without --offline-mode"
+                rpt_("Launch Blender without --offline-mode"),
             )
         else:
             lines = (
-                "Please turn Online Access on the System settings.",
+                rpt_("Please turn Online Access on the System settings."),
                 "",
-                "Internet access is required to install extensions from the internet."
+                rpt_("Internet access is required to install extensions from the internet."),
             )
         for line in lines:
-            col.label(text=line)
+            col.label(text=line, translate=False)
 
 
 class EXTENSIONS_OT_package_enable_not_installed(Operator):
@@ -3467,6 +3517,7 @@ classes = (
     EXTENSIONS_OT_repo_lock,
     EXTENSIONS_OT_repo_unlock,
 
+    EXTENSIONS_OT_userpref_tags_set,
     EXTENSIONS_OT_userpref_show_for_update,
     EXTENSIONS_OT_userpref_show_online,
     EXTENSIONS_OT_userpref_allow_online,

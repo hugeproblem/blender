@@ -3810,7 +3810,7 @@ static void do_brush_action(const Scene &scene,
       do_blob_brush(scene, sd, ob, nodes);
       break;
     case SCULPT_TOOL_PINCH:
-      SCULPT_do_pinch_brush(sd, ob, nodes);
+      do_pinch_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_INFLATE:
       do_inflate_brush(sd, ob, nodes);
@@ -3819,7 +3819,7 @@ static void do_brush_action(const Scene &scene,
       do_grab_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_ROTATE:
-      SCULPT_do_rotate_brush(sd, ob, nodes);
+      do_rotate_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_SNAKE_HOOK:
       SCULPT_do_snake_hook_brush(sd, ob, nodes);
@@ -3828,7 +3828,7 @@ static void do_brush_action(const Scene &scene,
       do_nudge_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_THUMB:
-      SCULPT_do_thumb_brush(sd, ob, nodes);
+      do_thumb_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_LAYER:
       SCULPT_do_layer_brush(sd, ob, nodes);
@@ -3846,7 +3846,7 @@ static void do_brush_action(const Scene &scene,
       do_multiplane_scrape_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_CLAY_THUMB:
-      SCULPT_do_clay_thumb_brush(sd, ob, nodes);
+      do_clay_thumb_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_FILL:
       if (invert && brush.flag & BRUSH_INVERT_TO_SCRAPE_FILL) {
@@ -3878,10 +3878,10 @@ static void do_brush_action(const Scene &scene,
       pose::do_pose_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_DRAW_SHARP:
-      SCULPT_do_draw_sharp_brush(sd, ob, nodes);
+      do_draw_sharp_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_ELASTIC_DEFORM:
-      SCULPT_do_elastic_deform_brush(sd, ob, nodes);
+      do_elastic_deform_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_SLIDE_RELAX:
       SCULPT_do_slide_relax_brush(sd, ob, nodes);
@@ -3893,13 +3893,18 @@ static void do_brush_action(const Scene &scene,
       cloth::do_cloth_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_DRAW_FACE_SETS:
-      face_set::do_draw_face_sets_brush(sd, ob, nodes);
+      if (!ss.cache->alt_smooth) {
+        do_draw_face_sets_brush(sd, ob, nodes);
+      }
+      else {
+        face_set::do_relax_face_sets_brush(sd, ob, nodes);
+      }
       break;
     case SCULPT_TOOL_DISPLACEMENT_ERASER:
       do_displacement_eraser_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_DISPLACEMENT_SMEAR:
-      SCULPT_do_displacement_smear_brush(sd, ob, nodes);
+      do_displacement_smear_brush(sd, ob, nodes);
       break;
     case SCULPT_TOOL_PAINT:
       color::do_paint_brush(paint_mode_settings, sd, ob, nodes, texnodes);
@@ -3921,7 +3926,7 @@ static void do_brush_action(const Scene &scene,
   }
 
   if (sculpt_brush_use_topology_rake(ss, brush)) {
-    SCULPT_bmesh_topology_rake(sd, ob, nodes, brush.topology_rake_factor);
+    do_bmesh_topology_rake_brush(sd, ob, nodes, brush.topology_rake_factor);
   }
 
   if (!auto_mask::tool_can_reuse_automask(brush.sculpt_tool) ||
@@ -4768,7 +4773,7 @@ static float sculpt_brush_dynamic_size_get(const Brush &brush,
     case SCULPT_TOOL_CLAY_STRIPS:
       return max_ff(initial_size * 0.30f, initial_size * powf(cache.pressure, 1.5f));
     case SCULPT_TOOL_CLAY_THUMB: {
-      float clay_stabilized_pressure = SCULPT_clay_thumb_get_stabilized_pressure(cache);
+      float clay_stabilized_pressure = clay_thumb_get_stabilized_pressure(cache);
       return initial_size * clay_stabilized_pressure;
     }
     default:
@@ -5598,13 +5603,15 @@ static void sculpt_restore_mesh(const Sculpt &sd, Object &ob)
   const Brush *brush = BKE_paint_brush_for_read(&sd.paint);
 
   /* Brushes that also use original coordinates and will need a "restore" step.
-   *  - SCULPT_TOOL_ROTATE
-   *  - SCULPT_TOOL_THUMB
-   *  - SCULPT_TOOL_ELASTIC_DEFORM
    *  - SCULPT_TOOL_BOUNDARY
    *  - SCULPT_TOOL_POSE
    */
-  if (ELEM(brush->sculpt_tool, SCULPT_TOOL_GRAB)) {
+  if (ELEM(brush->sculpt_tool,
+           SCULPT_TOOL_GRAB,
+           SCULPT_TOOL_THUMB,
+           SCULPT_TOOL_ROTATE,
+           SCULPT_TOOL_ELASTIC_DEFORM))
+  {
     restore_from_undo_step(sd, ob);
     return;
   }
@@ -5980,8 +5987,10 @@ static void sculpt_stroke_update_step(bContext *C,
              SCULPT_TOOL_BLOB,
              SCULPT_TOOL_CLAY,
              SCULPT_TOOL_CLAY_STRIPS,
+             SCULPT_TOOL_ELASTIC_DEFORM,
              SCULPT_TOOL_CREASE,
              SCULPT_TOOL_GRAB,
+             SCULPT_TOOL_THUMB,
              SCULPT_TOOL_DRAW,
              SCULPT_TOOL_FILL,
              SCULPT_TOOL_SCRAPE) &&
@@ -6860,6 +6869,20 @@ void calc_front_face(const float3 &view_normal,
   }
 }
 
+void calc_front_face(const float3 &view_normal,
+                     const Set<BMFace *, 0> &faces,
+                     const MutableSpan<float> factors)
+{
+  BLI_assert(faces.size() == factors.size());
+
+  int i = 0;
+  for (const BMFace *face : faces) {
+    const float dot = math::dot(view_normal, float3(face->no));
+    factors[i] *= std::max(dot, 0.0f);
+    i++;
+  }
+}
+
 void filter_region_clip_factors(const SculptSession &ss,
                                 const Span<float3> positions,
                                 const Span<int> verts,
@@ -6893,6 +6916,8 @@ void filter_region_clip_factors(const SculptSession &ss,
                                 const Span<float3> positions,
                                 const MutableSpan<float> factors)
 {
+  BLI_assert(positions.size() == factors.size());
+
   const RegionView3D *rv3d = ss.cache ? ss.cache->vc->rv3d : ss.rv3d;
   const View3D *v3d = ss.cache ? ss.cache->vc->v3d : ss.v3d;
   if (!RV3D_CLIPPING_ENABLED(v3d, rv3d)) {
@@ -6915,14 +6940,12 @@ void filter_region_clip_factors(const SculptSession &ss,
   }
 }
 
-void calc_distance_falloff(const SculptSession &ss,
-                           const Span<float3> positions,
-                           const Span<int> verts,
-                           const eBrushFalloffShape falloff_shape,
-                           const MutableSpan<float> r_distances,
-                           const MutableSpan<float> factors)
+void calc_brush_distances(const SculptSession &ss,
+                          const Span<float3> positions,
+                          const Span<int> verts,
+                          const eBrushFalloffShape falloff_shape,
+                          const MutableSpan<float> r_distances)
 {
-  BLI_assert(verts.size() == factors.size());
   BLI_assert(verts.size() == r_distances.size());
 
   const float3 &test_location = ss.cache ? ss.cache->location : ss.cursor_location;
@@ -6934,34 +6957,21 @@ void calc_distance_falloff(const SculptSession &ss,
     for (const int i : verts.index_range()) {
       float3 projected;
       closest_to_plane_normalized_v3(projected, test_plane, positions[verts[i]]);
-      r_distances[i] = math::distance_squared(projected, test_location);
+      r_distances[i] = math::distance(projected, test_location);
     }
   }
   else {
     for (const int i : verts.index_range()) {
-      r_distances[i] = math::distance_squared(test_location, positions[verts[i]]);
-    }
-  }
-
-  const float radius_sq = ss.cache ? ss.cache->radius_squared :
-                                     ss.cursor_radius * ss.cursor_radius;
-  for (const int i : r_distances.index_range()) {
-    if (r_distances[i] < radius_sq) {
-      r_distances[i] = std::sqrt(r_distances[i]);
-    }
-    else {
-      factors[i] = 0.0f;
+      r_distances[i] = math::distance(test_location, positions[verts[i]]);
     }
   }
 }
 
-void calc_distance_falloff(const SculptSession &ss,
-                           const Span<float3> positions,
-                           const eBrushFalloffShape falloff_shape,
-                           const MutableSpan<float> r_distances,
-                           const MutableSpan<float> factors)
+void calc_brush_distances(const SculptSession &ss,
+                          const Span<float3> positions,
+                          const eBrushFalloffShape falloff_shape,
+                          const MutableSpan<float> r_distances)
 {
-  BLI_assert(positions.size() == factors.size());
   BLI_assert(positions.size() == r_distances.size());
 
   const float3 &test_location = ss.cache ? ss.cache->location : ss.cursor_location;
@@ -6973,34 +6983,34 @@ void calc_distance_falloff(const SculptSession &ss,
     for (const int i : positions.index_range()) {
       float3 projected;
       closest_to_plane_normalized_v3(projected, test_plane, positions[i]);
-      r_distances[i] = math::distance_squared(projected, test_location);
+      r_distances[i] = math::distance(projected, test_location);
     }
   }
   else {
     for (const int i : positions.index_range()) {
-      r_distances[i] = math::distance_squared(test_location, positions[i]);
+      r_distances[i] = math::distance(test_location, positions[i]);
     }
   }
+}
 
-  const float radius_sq = ss.cache ? ss.cache->radius_squared :
-                                     ss.cursor_radius * ss.cursor_radius;
-  for (const int i : r_distances.index_range()) {
-    if (r_distances[i] < radius_sq) {
-      r_distances[i] = std::sqrt(r_distances[i]);
-    }
-    else {
+void filter_distances_with_radius(const float radius,
+                                  const Span<float> distances,
+                                  const MutableSpan<float> factors)
+{
+  for (const int i : distances.index_range()) {
+    if (distances[i] > radius) {
       factors[i] = 0.0f;
     }
   }
 }
 
-void calc_cube_distance_falloff(SculptSession &ss,
-                                const Brush &brush,
-                                const float4x4 &mat,
-                                const Span<float3> positions,
-                                const Span<int> verts,
-                                const MutableSpan<float> r_distances,
-                                const MutableSpan<float> factors)
+void calc_brush_cube_distances(const SculptSession &ss,
+                               const Brush &brush,
+                               const float4x4 &mat,
+                               const Span<float3> positions,
+                               const Span<int> verts,
+                               const MutableSpan<float> r_distances,
+                               const MutableSpan<float> factors)
 {
   BLI_assert(verts.size() == factors.size());
   BLI_assert(verts.size() == r_distances.size());
@@ -7024,12 +7034,12 @@ void calc_cube_distance_falloff(SculptSession &ss,
   }
 }
 
-void calc_cube_distance_falloff(SculptSession &ss,
-                                const Brush &brush,
-                                const float4x4 &mat,
-                                const Span<float3> positions,
-                                const MutableSpan<float> r_distances,
-                                const MutableSpan<float> factors)
+void calc_brush_cube_distances(const SculptSession &ss,
+                               const Brush &brush,
+                               const float4x4 &mat,
+                               const Span<float3> positions,
+                               const MutableSpan<float> r_distances,
+                               const MutableSpan<float> factors)
 {
   BLI_assert(positions.size() == factors.size());
   BLI_assert(positions.size() == r_distances.size());
@@ -7052,9 +7062,10 @@ void calc_cube_distance_falloff(SculptSession &ss,
   }
 }
 
-void apply_hardness_to_distances(const StrokeCache &cache, const MutableSpan<float> distances)
+void apply_hardness_to_distances(const float radius,
+                                 const float hardness,
+                                 const MutableSpan<float> distances)
 {
-  const float hardness = cache.paint_brush.hardness;
   if (hardness == 0.0f) {
     return;
   }
@@ -7062,7 +7073,6 @@ void apply_hardness_to_distances(const StrokeCache &cache, const MutableSpan<flo
     distances.fill(0.0f);
     return;
   }
-  const float radius = cache.radius;
   const float threshold = hardness * radius;
   const float radius_inv = math::rcp(radius);
   const float hardness_inv_rcp = math::rcp(1.0f - hardness);
@@ -7086,7 +7096,7 @@ void calc_brush_strength_factors(const StrokeCache &cache,
       eBrushCurvePreset(brush.curve_preset), brush.curve, distances, cache.radius, factors);
 }
 
-void calc_brush_texture_factors(SculptSession &ss,
+void calc_brush_texture_factors(const SculptSession &ss,
                                 const Brush &brush,
                                 const Span<float3> vert_positions,
                                 const Span<int> verts,
@@ -7111,7 +7121,7 @@ void calc_brush_texture_factors(SculptSession &ss,
   }
 }
 
-void calc_brush_texture_factors(SculptSession &ss,
+void calc_brush_texture_factors(const SculptSession &ss,
                                 const Brush &brush,
                                 const Span<float3> positions,
                                 const MutableSpan<float> factors)
@@ -7171,6 +7181,19 @@ void apply_translations(const Span<float3> translations, const Set<BMVert *, 0> 
   for (BMVert *vert : verts) {
     add_v3_v3(vert->co, translations[i]);
     i++;
+  }
+}
+
+void project_translations(const MutableSpan<float3> translations, const float3 &plane)
+{
+  /* Equivalent to #project_plane_v3_v3v3. */
+  const float len_sq = math::length_squared(plane);
+  if (len_sq < std::numeric_limits<float>::epsilon()) {
+    return;
+  }
+  const float dot_factor = -math::rcp(len_sq);
+  for (const int i : translations.index_range()) {
+    translations[i] += plane * math::dot(translations[i], plane) * dot_factor;
   }
 }
 
@@ -7356,6 +7379,7 @@ void scale_factors(const MutableSpan<float> factors, const float strength)
     factor *= strength;
   }
 }
+
 void translations_from_offset_and_factors(const float3 &offset,
                                           const Span<float> factors,
                                           const MutableSpan<float3> r_translations)
@@ -7364,6 +7388,17 @@ void translations_from_offset_and_factors(const float3 &offset,
 
   for (const int i : factors.index_range()) {
     r_translations[i] = offset * factors[i];
+  }
+}
+
+void transform_positions(const Span<float3> src,
+                         const float4x4 &transform,
+                         const MutableSpan<float3> dst)
+{
+  BLI_assert(src.size() == dst.size());
+
+  for (const int i : src.index_range()) {
+    dst[i] = math::transform_point(transform, src[i]);
   }
 }
 

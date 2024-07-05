@@ -131,6 +131,14 @@ class Action : public ::bAction {
   const Binding *binding(int64_t index) const;
   Binding *binding(int64_t index);
 
+  /**
+   * Return the Binding with the given handle.
+   *
+   * \param handle can be `Binding::unassigned`, in which case `nullptr` is returned.
+   *
+   * \return `nullptr` when the binding cannot be found, so either the handle was
+   * `Binding::unassigned` or some value that does not match any Binding in this Action.
+   */
   Binding *binding_for_handle(binding_handle_t handle);
   const Binding *binding_for_handle(binding_handle_t handle) const;
 
@@ -187,6 +195,26 @@ class Action : public ::bAction {
    * merely initializes the Binding itself to suitable values to start animating this ID.
    */
   Binding &binding_add_for_id(const ID &animated_id);
+
+  /**
+   * Ensure that an appropriate Binding exists for the given ID.
+   *
+   * If a suitable Binding can be found, that Binding is returned.  Otherwise,
+   * one is created.
+   *
+   * This is essentially a wrapper for `find_suitable_binding_for()` and
+   * `binding_add_for_id()`, and follows their semantics. Notably, like both of
+   * those methods, this Action does not need to already be assigned to the ID.
+   * And like `find_suitable_binding_for()`, if this Action *is* already
+   * assigned to the ID with a valid Binding, that Binding is returned.
+   *
+   * Note that this assigns neither this Action nor the Binding to the ID. This
+   * merely ensures that an appropriate Binding exists.
+   *
+   * \see `Action::find_suitable_binding_for()`
+   * \see `Action::binding_add_for_id()`
+   */
+  Binding &binding_ensure_for_id(const ID &animated_id);
 
   /** Assign this animation to the ID.
    *
@@ -484,6 +512,21 @@ class Binding : public ::ActionBinding {
   /** Return whether this Binding has an `idtype` set. */
   bool has_idtype() const;
 
+  /* Flags access. */
+  enum class Flags : uint8_t {
+    /** Expanded/collapsed in animation editors. */
+    Expanded = (1 << 0),
+    /** Selected in animation editors. */
+    Selected = (1 << 1),
+    /* When adding/removing a flag, also update the ENUM_OPERATORS() invocation,
+     * all the way below the Binding class. */
+  };
+  Flags flags() const;
+  bool is_expanded() const;
+  void set_expanded(bool expanded);
+  bool is_selected() const;
+  void set_selected(bool selected);
+
   /** Return the set of IDs that are animated by this Binding. */
   Span<ID *> users(Main &bmain) const;
 
@@ -539,6 +582,7 @@ class Binding : public ::ActionBinding {
 };
 static_assert(sizeof(Binding) == sizeof(::ActionBinding),
               "DNA struct and its C++ wrapper must have the same size");
+ENUM_OPERATORS(Binding::Flags, Binding::Flags::Selected);
 
 /**
  * KeyframeStrips effectively contain a bag of F-Curves for each Binding.
