@@ -197,6 +197,7 @@ class NODE_MT_geometry_node_GEO_GEOMETRY_WRITE(Menu):
 
     def draw(self, context):
         layout = self.layout
+        node_add_menu.add_node_type(layout, "GeometryNodeSetGeometryName")
         node_add_menu.add_node_type(layout, "GeometryNodeSetID")
         node_add_menu.add_node_type(layout, "GeometryNodeSetPosition", search_weight=1.0)
         if context.space_data.geometry_nodes_type == 'TOOL':
@@ -456,6 +457,7 @@ class NODE_MT_category_import(Menu):
 
     def draw(self, _context):
         layout = self.layout
+        node_add_menu.add_node_type(layout, "GeometryNodeImportOBJ")
         node_add_menu.add_node_type(layout, "GeometryNodeImportSTL")
         node_add_menu.draw_assets_for_catalog(layout, "Input/Import")
 

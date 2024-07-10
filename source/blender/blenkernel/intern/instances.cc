@@ -3,12 +3,19 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "BLI_array_utils.hh"
+#include "BLI_listbase.h"
 #include "BLI_rand.hh"
 #include "BLI_task.hh"
 
+#include "DNA_collection_types.h"
+#include "DNA_object_types.h"
+
 #include "BKE_customdata.hh"
 #include "BKE_geometry_set.hh"
+#include "BKE_geometry_set_instances.hh"
 #include "BKE_instances.hh"
+
+#include "BLT_translation.hh"
 
 namespace blender::bke {
 
@@ -16,6 +23,14 @@ InstanceReference::InstanceReference(GeometrySet geometry_set)
     : type_(Type::GeometrySet),
       geometry_set_(std::make_unique<GeometrySet>(std::move(geometry_set)))
 {
+}
+
+InstanceReference::InstanceReference(const InstanceReference &other)
+    : type_(other.type_), data_(other.data_)
+{
+  if (other.geometry_set_) {
+    geometry_set_ = std::make_unique<GeometrySet>(*other.geometry_set_);
+  }
 }
 
 void InstanceReference::ensure_owns_direct_data()
@@ -33,6 +48,67 @@ bool InstanceReference::owns_direct_data() const
     return true;
   }
   return geometry_set_->owns_direct_data();
+}
+
+static void convert_collection_to_instances(const Collection &collection,
+                                            bke::Instances &instances)
+{
+  LISTBASE_FOREACH (CollectionChild *, collection_child, &collection.children) {
+    float4x4 transform = float4x4::identity();
+    transform.location() += float3(collection_child->collection->instance_offset);
+    transform.location() -= float3(collection.instance_offset);
+    const int handle = instances.add_reference(*collection_child->collection);
+    instances.add_instance(handle, transform);
+  }
+
+  LISTBASE_FOREACH (CollectionObject *, collection_object, &collection.gobject) {
+    float4x4 transform = float4x4::identity();
+    transform.location() -= float3(collection.instance_offset);
+    transform *= (collection_object->ob)->object_to_world();
+    const int handle = instances.add_reference(*collection_object->ob);
+    instances.add_instance(handle, transform);
+  }
+}
+
+void InstanceReference::to_geometry_set(GeometrySet &r_geometry_set) const
+{
+  r_geometry_set.clear();
+  switch (type_) {
+    case Type::Object: {
+      const Object &object = this->object();
+      r_geometry_set = bke::object_get_evaluated_geometry_set(object);
+      break;
+    }
+    case Type::Collection: {
+      const Collection &collection = this->collection();
+      std::unique_ptr<bke::Instances> instances_ptr = std::make_unique<bke::Instances>();
+      convert_collection_to_instances(collection, *instances_ptr);
+      r_geometry_set.replace_instances(instances_ptr.release());
+      break;
+    }
+    case Type::GeometrySet: {
+      r_geometry_set = this->geometry_set();
+      break;
+    }
+    case Type::None: {
+      break;
+    }
+  }
+}
+
+StringRefNull InstanceReference::name() const
+{
+  switch (type_) {
+    case Type::Object:
+      return this->object().id.name + 2;
+    case Type::Collection:
+      return this->collection().id.name + 2;
+    case Type::GeometrySet:
+      return this->geometry_set().name;
+    case Type::None:
+      break;
+  }
+  return "";
 }
 
 bool operator==(const InstanceReference &a, const InstanceReference &b)

@@ -561,6 +561,30 @@ def addons_panel_draw_items(
     return module_names
 
 
+def addons_panel_draw_error_duplicates(layout):
+    import addon_utils
+    box = layout.box()
+    row = box.row()
+    row.label(text="Multiple add-ons with the same name found!")
+    row.label(icon='ERROR')
+    box.label(text="Delete one of each pair to resolve:")
+    for (addon_name, addon_file, addon_path) in addon_utils.error_duplicates:
+        box.separator()
+        sub_col = box.column(align=True)
+        sub_col.label(text=addon_name + ":")
+        sub_col.label(text="    " + addon_file)
+        sub_col.label(text="    " + addon_path)
+
+
+def addons_panel_draw_error_generic(layout, lines):
+    box = layout.box()
+    sub = box.row()
+    sub.label(text=lines[0])
+    sub.label(icon='ERROR')
+    for l in lines[1:]:
+        box.label(text=l)
+
+
 def addons_panel_draw_impl(
         self,
         context,  # `bpy.types.Context`
@@ -580,13 +604,25 @@ def addons_panel_draw_impl(
 
     from . import repo_cache_store_ensure
 
+    layout = self.layout
+
+    # First show any errors, this should be an exceptional situation that should be resolved,
+    # otherwise add-ons may not behave correctly.
+    if addon_utils.error_duplicates:
+        addons_panel_draw_error_duplicates(layout)
+    if addon_utils.error_encoding:
+        addons_panel_draw_error_generic(
+            layout, (
+                "One or more add-ons do not have UTF-8 encoding",
+                "(see console for details)",
+            ),
+        )
+
     repo_cache_store = repo_cache_store_ensure()
 
     # This isn't elegant, but the preferences aren't available on registration.
     if not repo_cache_store.is_init():
         repo_cache_store_refresh_from_prefs(repo_cache_store)
-
-    layout = self.layout
 
     prefs = context.preferences
 
@@ -716,6 +752,7 @@ def addons_panel_draw(panel, context):
 # Light weight wrapper for extension local and remote extension manifest data.
 # Used for display purposes. Includes some information for filtering.
 
+# pylint: disable-next=wrong-import-order
 from collections import namedtuple
 
 ExtensionUI = namedtuple(
@@ -863,15 +900,14 @@ class ExtensionUI_FilterParams:
             if is_addon:
                 if is_installed:
                     # Currently we only need to know the module name once installed.
-                    addon_module_name = repo_module_prefix + pkg_id
                     # pylint: disable-next=possibly-used-before-assignment
+                    addon_module_name = repo_module_prefix + pkg_id
                     is_enabled = addon_module_name in self.addons_enabled
 
                 else:
                     is_enabled = False
                     addon_module_name = None
             elif is_theme:
-                # pylint: disable-next=possibly-used-before-assignment
                 is_enabled = (repo_index, pkg_id) == self.active_theme_info
                 addon_module_name = None
             else:
@@ -1631,8 +1667,8 @@ class USERPREF_MT_extensions_settings(Menu):
 
             layout.separator()
 
-            layout.operator("extensions.repo_lock")
-            layout.operator("extensions.repo_unlock")
+            layout.operator("extensions.repo_lock_all")
+            layout.operator("extensions.repo_unlock_all")
 
 
 # This menu is used as the icon-only top right drop-down for each extension.
@@ -1913,7 +1949,29 @@ def extensions_repo_active_draw(self, _context):
 
     layout.operator("extensions.repo_sync_all", text="", icon='FILE_REFRESH').use_active_only = True
 
-    layout.operator("extensions.package_upgrade_all", text="", icon='IMPORT').use_active_only = True
+    layout.separator()
+
+    # Extra items.
+    layout.menu("USERPREF_MT_extensions_active_repo_extra", text="", icon='DOWNARROW_HLT')
+
+
+class USERPREF_MT_extensions_active_repo_extra(Menu):
+    bl_label = "Active Extension Repository"
+
+    def draw(self, _context):
+        layout = self.layout
+
+        layout.operator(
+            "extensions.package_upgrade_all",
+            text="Install Available Updates",
+            icon='IMPORT',
+        ).use_active_only = True
+
+        layout.operator(
+            "extensions.repo_unlock",
+            text="Force Unlock Repository...",
+            icon='UNLOCKED',
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -2126,6 +2184,7 @@ classes = (
     USERPREF_PT_extensions_tags,
     USERPREF_MT_extensions_settings,
     USERPREF_MT_extensions_item,
+    USERPREF_MT_extensions_active_repo_extra,
 )
 
 

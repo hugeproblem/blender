@@ -462,7 +462,7 @@ struct StrokeCache {
   float vertex_rotation; /* amount to rotate the vertices when using rotate brush */
   Dial *dial;
 
-  char saved_active_brush_name[MAX_ID_NAME];
+  Brush *saved_active_brush;
   char saved_mask_brush_tool;
   int saved_smooth_size; /* smooth tool copies the size of the current tool */
 
@@ -902,6 +902,7 @@ void SCULPT_vertex_neighbors_get(const SculptSession &ss,
 namespace blender::ed::sculpt_paint {
 
 Span<BMVert *> vert_neighbors_get_bmesh(BMVert &vert, Vector<BMVert *, 64> &neighbors);
+Span<BMVert *> vert_neighbors_get_interior_bmesh(BMVert &vert, Vector<BMVert *, 64> &neighbors);
 
 }
 
@@ -1556,6 +1557,21 @@ float4 neighbor_color_average(SculptSession &ss,
  */
 float3 neighbor_coords_average_interior(const SculptSession &ss, PBVHVertRef vertex);
 
+void neighbor_position_average_interior_grids(OffsetIndices<int> faces,
+                                              Span<int> corner_verts,
+                                              BitSpan boundary_verts,
+                                              const SubdivCCG &subdiv_ccg,
+                                              Span<int> grids,
+                                              MutableSpan<float3> new_positions);
+
+void neighbor_position_average_interior_bmesh(const Set<BMVert *, 0> &verts,
+                                              MutableSpan<float3> new_positions);
+
+void neighbor_position_average_mesh(Span<float3> positions,
+                                    Span<int> verts,
+                                    Span<Vector<int>> vert_neighbors,
+                                    MutableSpan<float3> new_positions);
+
 void enhance_details_brush(const Sculpt &sd, Object &ob, Span<PBVHNode *> nodes);
 
 /* Surface Smooth Brush. */
@@ -2054,9 +2070,8 @@ float clay_thumb_get_stabilized_pressure(const blender::ed::sculpt_paint::Stroke
 
 }
 
-void SCULPT_do_snake_hook_brush(const Sculpt &sd, Object &ob, blender::Span<PBVHNode *> nodes);
 void SCULPT_do_layer_brush(const Sculpt &sd, Object &ob, blender::Span<PBVHNode *> nodes);
-void SCULPT_do_slide_relax_brush(const Sculpt &sd, Object &ob, blender::Span<PBVHNode *> nodes);
+void SCULPT_do_topology_relax_brush(const Sculpt &sd, Object &ob, blender::Span<PBVHNode *> nodes);
 
 /** \} */
 

@@ -1592,8 +1592,10 @@ static uiBlock *wm_block_dialog_create(bContext *C, ARegion *region, void *user_
   const bool windows_layout = false;
 #endif
 
-  /* New column so as not to interfere with custom layouts, see: #26436. */
-  {
+  /* Check there are no active default buttons, allowing a dialog to define it's own
+   * confirmation buttons which are shown instead of these, see: #124098. */
+  if (!UI_block_has_active_default_button(uiLayoutGetBlock(layout))) {
+    /* New column so as not to interfere with custom layouts, see: #26436. */
     uiLayout *col = uiLayoutColumn(layout, false);
     uiBlock *col_block = uiLayoutGetBlock(col);
     uiBut *confirm_but;
@@ -1767,7 +1769,8 @@ static int wm_operator_props_popup_ex(bContext *C,
                                       const bool do_call,
                                       const bool do_redo,
                                       std::optional<std::string> title = std::nullopt,
-                                      std::optional<std::string> confirm_text = std::nullopt)
+                                      std::optional<std::string> confirm_text = std::nullopt,
+                                      const bool cancel_default = false)
 {
   if ((op->type->flag & OPTYPE_REGISTER) == 0) {
     BKE_reportf(op->reports,
@@ -1790,7 +1793,7 @@ static int wm_operator_props_popup_ex(bContext *C,
   /* If we don't have global undo, we can't do undo push for automatic redo,
    * so we require manual OK clicking in this popup. */
   if (!do_redo || !(U.uiflag & USER_GLOBALUNDO)) {
-    return WM_operator_props_dialog_popup(C, op, 300, title, confirm_text);
+    return WM_operator_props_dialog_popup(C, op, 300, title, confirm_text, cancel_default);
   }
 
   UI_popup_block_ex(C, wm_block_create_redo, nullptr, wm_block_redo_cancel_cb, op, op);
@@ -1806,9 +1809,10 @@ int WM_operator_props_popup_confirm_ex(bContext *C,
                                        wmOperator *op,
                                        const wmEvent * /*event*/,
                                        std::optional<std::string> title,
-                                       std::optional<std::string> confirm_text)
+                                       std::optional<std::string> confirm_text,
+                                       const bool cancel_default)
 {
-  return wm_operator_props_popup_ex(C, op, false, false, title, confirm_text);
+  return wm_operator_props_popup_ex(C, op, false, false, title, confirm_text, cancel_default);
 }
 
 int WM_operator_props_popup_confirm(bContext *C, wmOperator *op, const wmEvent * /*event*/)
@@ -1830,7 +1834,8 @@ int WM_operator_props_dialog_popup(bContext *C,
                                    wmOperator *op,
                                    int width,
                                    std::optional<std::string> title,
-                                   std::optional<std::string> confirm_text)
+                                   std::optional<std::string> confirm_text,
+                                   const bool cancel_default)
 {
   wmOpPopUp *data = MEM_new<wmOpPopUp>(__func__);
   data->op = op;
@@ -1842,7 +1847,7 @@ int WM_operator_props_dialog_popup(bContext *C,
   data->icon = ALERT_ICON_NONE;
   data->size = WM_POPUP_SIZE_SMALL;
   data->position = WM_POPUP_POSITION_MOUSE;
-  data->cancel_default = false;
+  data->cancel_default = cancel_default;
   data->mouse_move_quit = false;
   data->include_properties = true;
 
@@ -2250,6 +2255,39 @@ static void WM_OT_call_panel(wmOperatorType *ot)
   RNA_def_property_flag(prop, PROP_SKIP_SAVE);
   prop = RNA_def_boolean(ot->srna, "keep_open", true, "Keep Open", "");
   RNA_def_property_flag(prop, PROP_SKIP_SAVE);
+}
+
+static int asset_shelf_popover_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+{
+  char *asset_shelf_id = RNA_string_get_alloc(op->ptr, "name", nullptr, 0, nullptr);
+  BLI_SCOPED_DEFER([&]() { MEM_freeN(asset_shelf_id); });
+
+  if (!blender::ui::asset_shelf_popover_invoke(*C, asset_shelf_id, *op->reports)) {
+    return OPERATOR_CANCELLED | OPERATOR_PASS_THROUGH;
+  }
+
+  return OPERATOR_INTERFACE;
+}
+
+/* Needs to be defined at WM level to be globally accessible. */
+static void WM_OT_call_asset_shelf_popover(wmOperatorType *ot)
+{
+  /* identifiers */
+  ot->name = "Call Asset Shelf Popover";
+  ot->idname = "WM_OT_call_asset_shelf_popover";
+  ot->description = "Open a predefined asset shelf in a popup";
+
+  /* api callbacks */
+  ot->invoke = asset_shelf_popover_invoke;
+
+  ot->flag = OPTYPE_INTERNAL;
+
+  RNA_def_string(ot->srna,
+                 "name",
+                 nullptr,
+                 0,
+                 "Asset Shelf Name",
+                 "Identifier of the asset shelf to display");
 }
 
 /** \} */
@@ -4138,6 +4176,7 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_call_menu);
   WM_operatortype_append(WM_OT_call_menu_pie);
   WM_operatortype_append(WM_OT_call_panel);
+  WM_operatortype_append(WM_OT_call_asset_shelf_popover);
   WM_operatortype_append(WM_OT_radial_control);
   WM_operatortype_append(WM_OT_stereo3d_set);
 #if defined(WIN32)

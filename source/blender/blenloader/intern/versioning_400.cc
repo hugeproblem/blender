@@ -28,6 +28,7 @@
 #include "DNA_movieclip_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_sequence_types.h"
+#include "DNA_workspace_types.h"
 #include "DNA_world_types.h"
 
 #include "DNA_defaults.h"
@@ -51,6 +52,7 @@
 #include "BKE_armature.hh"
 #include "BKE_attribute.hh"
 #include "BKE_colortools.hh"
+#include "BKE_context.hh"
 #include "BKE_curve.hh"
 #include "BKE_customdata.hh"
 #include "BKE_effect.h"
@@ -61,6 +63,7 @@
 #include "BKE_mesh_legacy_convert.hh"
 #include "BKE_nla.h"
 #include "BKE_node_runtime.hh"
+#include "BKE_paint.hh"
 #include "BKE_scene.hh"
 #include "BKE_tracking.h"
 
@@ -357,6 +360,33 @@ static void versioning_eevee_material_shadow_none(Material *material)
   bNode *output_node = version_eevee_output_node_get(ntree, SH_NODE_OUTPUT_MATERIAL);
   if (output_node == nullptr) {
     return;
+  }
+
+  if (output_node->custom1 == SHD_OUTPUT_ALL) {
+    /* We do not want to affect Cycles. So we split the output into two specific outputs. */
+    output_node->custom1 = SHD_OUTPUT_CYCLES;
+
+    bNode *new_output = blender::bke::nodeAddNode(nullptr, ntree, "ShaderNodeOutputMaterial");
+    new_output->custom1 = SHD_OUTPUT_EEVEE;
+    new_output->parent = output_node->parent;
+    new_output->locx = output_node->locx;
+    new_output->locy = output_node->locy - output_node->height - 120;
+
+    auto copy_link = [&](const char *socket_name) {
+      bNodeSocket *sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, socket_name);
+      if (sock && sock->link) {
+        bNodeLink *link = sock->link;
+        bNodeSocket *to_sock = blender::bke::nodeFindSocket(new_output, SOCK_IN, socket_name);
+        blender::bke::nodeAddLink(ntree, link->fromnode, link->fromsock, new_output, to_sock);
+      }
+    };
+
+    copy_link("Surface");
+    copy_link("Volume");
+    copy_link("Displacement");
+    copy_link("Thickness");
+
+    output_node = new_output;
   }
 
   bNodeSocket *out_sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, "Surface");
@@ -2418,7 +2448,7 @@ static void enable_geometry_nodes_is_modifier(Main &bmain)
         return true;
       }
       if (!group->geometry_node_asset_traits) {
-        group->geometry_node_asset_traits = MEM_new<GeometryNodeAssetTraits>(__func__);
+        group->geometry_node_asset_traits = MEM_cnew<GeometryNodeAssetTraits>(__func__);
       }
       group->geometry_node_asset_traits->flag |= GEO_NODE_ASSET_MODIFIER;
       return false;
@@ -2575,6 +2605,40 @@ static bool seq_filter_bilinear_to_auto(Sequence *seq, void * /*user_data*/)
     transform->filter = SEQ_TRANSFORM_FILTER_AUTO;
   }
   return true;
+}
+
+static void update_paint_modes_for_brush_assets(Main &bmain)
+{
+  /* Replace paint brushes with a reference to the default brush asset for that mode. */
+  LISTBASE_FOREACH (Scene *, scene, &bmain.scenes) {
+    BKE_paint_brushes_set_default_references(scene->toolsettings);
+  }
+
+  /* Replace persistent tool references with the new single builtin brush tool. */
+  LISTBASE_FOREACH (WorkSpace *, workspace, &bmain.workspaces) {
+    LISTBASE_FOREACH (bToolRef *, tref, &workspace->tools) {
+      if (tref->space_type != SPACE_VIEW3D) {
+        continue;
+      }
+      if (!ELEM(tref->mode,
+                CTX_MODE_SCULPT,
+                CTX_MODE_PAINT_VERTEX,
+                CTX_MODE_PAINT_WEIGHT,
+                CTX_MODE_PAINT_TEXTURE,
+                CTX_MODE_PAINT_GPENCIL_LEGACY,
+                CTX_MODE_PAINT_GREASE_PENCIL,
+                CTX_MODE_SCULPT_GPENCIL_LEGACY,
+                CTX_MODE_SCULPT_GREASE_PENCIL,
+                CTX_MODE_WEIGHT_GPENCIL_LEGACY,
+                CTX_MODE_WEIGHT_GREASE_PENCIL,
+                CTX_MODE_VERTEX_GPENCIL_LEGACY,
+                CTX_MODE_SCULPT_CURVES))
+      {
+        continue;
+      }
+      STRNCPY(tref->idname, "builtin.brush");
+    }
+  }
 }
 
 static void image_settings_avi_to_ffmpeg(Scene *scene)
@@ -4297,6 +4361,19 @@ void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
       scene->view_settings.temperature = 6500.0f;
       scene->view_settings.tint = 10.0f;
     }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 7)) {
+    LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
+      SequencerToolSettings *sequencer_tool_settings = SEQ_tool_settings_ensure(scene);
+      sequencer_tool_settings->snap_mode |= SEQ_SNAP_TO_PREVIEW_BORDERS |
+                                            SEQ_SNAP_TO_PREVIEW_CENTER |
+                                            SEQ_SNAP_TO_STRIPS_PREVIEW;
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 8)) {
+    update_paint_modes_for_brush_assets(*bmain);
   }
 
   /**
