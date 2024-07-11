@@ -412,6 +412,14 @@ class subcmd_repo:
             print("    directory: \"{:s}\"".format(repo.directory))
             if url := repo.remote_url:
                 print("    url: \"{:s}\"".format(url))
+                # As with the UI the access-token is replaced by `*`,
+                # this is done to show which repositories use an access token.
+                print("    access_token: {:s}".format(
+                    "\"{:s}\"".format("*" * len(repo.access_token)) if repo.access_token else
+                    "None"
+                ))
+            else:
+                print("    source: \"{:s}\"".format(repo.source))
 
         return True
 
@@ -422,11 +430,24 @@ class subcmd_repo:
             repo_id: str,
             directory: str,
             url: str,
+            access_token: str,
+            source: str,
             cache: bool,
             clear_all: bool,
             no_prefs: bool,
     ) -> bool:
         from bpy import context
+
+        # This could be allowed the Python API doesn't prevent it.
+        # However this is not going to do what the user would expect so disallow it.
+        if url:
+            if source == 'SYSTEM':
+                sys.stderr.write("Cannot use \"--url\" and \"--source=SYSTEM\" together.\n")
+                return False
+        else:
+            if access_token:
+                sys.stderr.write("Cannot use \"--access-token\" without a \"--url\".\n")
+                return False
 
         extension_repos = context.preferences.extensions.repos
         if clear_all:
@@ -438,8 +459,13 @@ class subcmd_repo:
             module=repo_id,
             custom_directory=directory,
             remote_url=url,
+            source=source,
         )
         repo.use_cache = cache
+
+        if access_token:
+            repo.use_access_token = True
+            repo.access_token = access_token
 
         if not no_prefs:
             blender_preferences_write()
@@ -759,6 +785,29 @@ def cli_extension_args_repo_add(subparsers: "argparse._SubParsersAction[argparse
     )
 
     subparse.add_argument(
+        "--access-token",
+        dest="access_token",
+        type=str,
+        default="",
+        metavar="ACCESS_TOKEN",
+        help=(
+            "The access token to use for remote repositories which require a token."
+        ),
+    )
+
+    subparse.add_argument(
+        "--source",
+        dest="source",
+        choices=('USER', 'SYSTEM'),
+        default='USER',
+        metavar="SOURCE",
+        help=(
+            "The type of source in ('USER', 'SYSTEM').\n"
+            "System repositories are managed outside of Blender and are considered read-only."
+        ),
+    )
+
+    subparse.add_argument(
         "--cache",
         dest="cache",
         metavar="BOOLEAN",
@@ -786,6 +835,8 @@ def cli_extension_args_repo_add(subparsers: "argparse._SubParsersAction[argparse
             name=args.name,
             directory=args.directory,
             url=args.url,
+            access_token=args.access_token,
+            source=args.source,
             cache=args.cache,
             clear_all=args.clear_all,
             no_prefs=args.no_prefs,
