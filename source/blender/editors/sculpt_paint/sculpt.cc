@@ -3875,9 +3875,9 @@ static void do_brush_action(const Scene &scene,
       if ((brush.sculpt_tool == SCULPT_TOOL_SMOOTH) &&
           (brush.smooth_deform_type == BRUSH_SMOOTH_DEFORM_SURFACE))
       {
-        BLI_assert(ss.cache->surface_smooth_laplacian_disp == nullptr);
-        ss.cache->surface_smooth_laplacian_disp = static_cast<float(*)[3]>(
-            MEM_callocN(sizeof(float[3]) * SCULPT_vertex_count_get(ss), "HC smooth laplacian b"));
+        BLI_assert(ss.cache->surface_smooth_laplacian_disp.is_empty());
+        ss.cache->surface_smooth_laplacian_disp = Array<float3>(SCULPT_vertex_count_get(ss),
+                                                                float3(0));
       }
     }
   }
@@ -4030,7 +4030,7 @@ static void do_brush_action(const Scene &scene,
       break;
     case SCULPT_TOOL_SLIDE_RELAX:
       if (ss.cache->alt_smooth) {
-        SCULPT_do_topology_relax_brush(sd, ob, nodes);
+        do_topology_relax_brush(sd, ob, nodes);
       }
       else {
         do_topology_slide_brush(sd, ob, nodes);
@@ -4047,7 +4047,7 @@ static void do_brush_action(const Scene &scene,
         do_draw_face_sets_brush(sd, ob, nodes);
       }
       else {
-        face_set::do_relax_face_sets_brush(sd, ob, nodes);
+        do_relax_face_sets_brush(sd, ob, nodes);
       }
       break;
     case SCULPT_TOOL_DISPLACEMENT_ERASER:
@@ -4537,23 +4537,14 @@ static const char *sculpt_tool_name(const Sculpt &sd)
   return "Sculpting";
 }
 
-/* Operator for applying a stroke (various attributes including mouse path)
- * using the current brush. */
+namespace blender::ed::sculpt_paint {
 
-void SCULPT_cache_free(blender::ed::sculpt_paint::StrokeCache *cache)
+StrokeCache::~StrokeCache()
 {
-  using namespace blender::ed::sculpt_paint;
-  MEM_SAFE_FREE(cache->dial);
-  MEM_SAFE_FREE(cache->surface_smooth_laplacian_disp);
-  MEM_SAFE_FREE(cache->layer_displacement_factor);
-  MEM_SAFE_FREE(cache->detail_directions);
-
-  if (cache->cloth_sim) {
-    cloth::simulation_free(cache->cloth_sim);
-  }
-
-  MEM_delete(cache);
+  MEM_SAFE_FREE(this->dial);
 }
+
+}  // namespace blender::ed::sculpt_paint
 
 namespace blender::ed::sculpt_paint {
 
@@ -5666,10 +5657,10 @@ static void sculpt_restore_mesh(const Sculpt &sd, Object &ob)
    *  - SCULPT_TOOL_POSE
    */
   if (ELEM(brush->sculpt_tool,
+           SCULPT_TOOL_ELASTIC_DEFORM,
            SCULPT_TOOL_GRAB,
            SCULPT_TOOL_THUMB,
-           SCULPT_TOOL_ROTATE,
-           SCULPT_TOOL_ELASTIC_DEFORM))
+           SCULPT_TOOL_ROTATE))
   {
     undo::restore_from_undo_step(sd, ob);
     return;
@@ -5691,7 +5682,7 @@ static void sculpt_restore_mesh(const Sculpt &sd, Object &ob)
     undo::restore_from_undo_step(sd, ob);
 
     if (ss.cache) {
-      MEM_SAFE_FREE(ss.cache->layer_displacement_factor);
+      ss.cache->layer_displacement_factor = {};
     }
   }
 }
@@ -6041,19 +6032,15 @@ static void sculpt_stroke_update_step(bContext *C,
    *
    * For some brushes, flushing is done in the brush code itself.
    */
-  if (!(ELEM(brush.sculpt_tool,
-             SCULPT_TOOL_BLOB,
-             SCULPT_TOOL_CLAY,
-             SCULPT_TOOL_CLAY_STRIPS,
-             SCULPT_TOOL_ELASTIC_DEFORM,
-             SCULPT_TOOL_CREASE,
-             SCULPT_TOOL_GRAB,
-             SCULPT_TOOL_SNAKE_HOOK,
-             SCULPT_TOOL_THUMB,
-             SCULPT_TOOL_DRAW,
-             SCULPT_TOOL_FILL,
-             SCULPT_TOOL_SCRAPE) &&
-        BKE_pbvh_type(*ss.pbvh) == PBVH_FACES))
+  if ((ELEM(brush.sculpt_tool,
+            SCULPT_TOOL_BOUNDARY,
+            SCULPT_TOOL_CLOTH,
+            SCULPT_TOOL_LAYER,
+            SCULPT_TOOL_MASK,
+            SCULPT_TOOL_PAINT,
+            SCULPT_TOOL_POSE,
+            SCULPT_TOOL_SMOOTH) ||
+       BKE_pbvh_type(*ss.pbvh) != PBVH_FACES))
   {
     if (ss.deform_modifiers_active) {
       SCULPT_flush_stroke_deform(sd, ob, sculpt_tool_is_proxy_used(brush.sculpt_tool));
@@ -6120,7 +6107,7 @@ static void sculpt_stroke_done(const bContext *C, PaintStroke * /*stroke*/)
   }
 
   BKE_pbvh_node_color_buffer_free(*ss.pbvh);
-  SCULPT_cache_free(ss.cache);
+  MEM_delete(ss.cache);
   ss.cache = nullptr;
 
   sculpt_stroke_undo_end(C, brush);
@@ -6257,10 +6244,8 @@ static void sculpt_brush_stroke_cancel(bContext *C, wmOperator *op)
 
   paint_stroke_cancel(C, op, static_cast<PaintStroke *>(op->customdata));
 
-  if (ss.cache) {
-    SCULPT_cache_free(ss.cache);
-    ss.cache = nullptr;
-  }
+  MEM_delete(ss.cache);
+  ss.cache = nullptr;
 
   sculpt_brush_exit_tex(sd);
 }
@@ -7491,6 +7476,26 @@ OffsetIndices<int> create_node_vert_offsets(Span<PBVHNode *> nodes, Array<int> &
   return offset_indices::accumulate_counts_to_offsets(node_data);
 }
 
+OffsetIndices<int> create_node_vert_offsets(Span<PBVHNode *> nodes,
+                                            const CCGKey &key,
+                                            Array<int> &node_data)
+{
+  node_data.reinitialize(nodes.size() + 1);
+  for (const int i : nodes.index_range()) {
+    node_data[i] = bke::pbvh::node_grid_indices(*nodes[i]).size() * key.grid_area;
+  }
+  return offset_indices::accumulate_counts_to_offsets(node_data);
+}
+
+OffsetIndices<int> create_node_vert_offsets_bmesh(Span<PBVHNode *> nodes, Array<int> &node_data)
+{
+  node_data.reinitialize(nodes.size() + 1);
+  for (const int i : nodes.index_range()) {
+    node_data[i] = BKE_pbvh_bmesh_node_unique_verts(nodes[i]).size();
+  }
+  return offset_indices::accumulate_counts_to_offsets(node_data);
+}
+
 void calc_vert_neighbors(const OffsetIndices<int> faces,
                          const Span<int> corner_verts,
                          const GroupedSpan<int> vert_to_face,
@@ -7554,6 +7559,72 @@ void calc_vert_neighbors_interior(const OffsetIndices<int> faces,
         neighbors.remove_if([&](const int vert) { return !boundary_verts[vert]; });
       }
     }
+  }
+}
+
+void calc_vert_neighbors_interior(const OffsetIndices<int> faces,
+                                  const Span<int> corner_verts,
+                                  const BitSpan boundary_verts,
+                                  const SubdivCCG &subdiv_ccg,
+                                  const Span<int> grids,
+                                  const MutableSpan<Vector<SubdivCCGCoord>> result)
+{
+  const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
+
+  BLI_assert(grids.size() * key.grid_area == result.size());
+
+  for (const int i : grids.index_range()) {
+    const int grid = grids[i];
+    const int node_verts_start = i * key.grid_area;
+
+    /* TODO: This loop could be optimized in the future by skipping unnecessary logic for
+     * non-boundary grid vertices. */
+    for (const int y : IndexRange(key.grid_size)) {
+      for (const int x : IndexRange(key.grid_size)) {
+        const int offset = CCG_grid_xy_to_index(key.grid_size, x, y);
+        const int node_vert_index = node_verts_start + offset;
+
+        SubdivCCGCoord coord{};
+        coord.grid_index = grid;
+        coord.x = x;
+        coord.y = y;
+
+        SubdivCCGNeighbors neighbors;
+        BKE_subdiv_ccg_neighbor_coords_get(subdiv_ccg, coord, false, neighbors);
+
+        if (BKE_subdiv_ccg_coord_is_mesh_boundary(
+                faces, corner_verts, boundary_verts, subdiv_ccg, coord))
+        {
+          if (neighbors.coords.size() == 2) {
+            /* Do not include neighbors of corner vertices. */
+            neighbors.coords.clear();
+          }
+          else {
+            /* Only include other boundary vertices as neighbors of boundary vertices. */
+            neighbors.coords.remove_if([&](const SubdivCCGCoord coord) {
+              return !BKE_subdiv_ccg_coord_is_mesh_boundary(
+                  faces, corner_verts, boundary_verts, subdiv_ccg, coord);
+            });
+          }
+        }
+        result[node_vert_index] = neighbors.coords;
+      }
+    }
+  }
+}
+
+void calc_vert_neighbors_interior(const Set<BMVert *, 0> &verts,
+                                  MutableSpan<Vector<BMVert *>> result)
+{
+  BLI_assert(verts.size() == result.size());
+  Vector<BMVert *, 64> neighbor_data;
+
+  int i = 0;
+  for (BMVert *vert : verts) {
+    neighbor_data.clear();
+    vert_neighbors_get_interior_bmesh(*vert, neighbor_data);
+    result[i] = neighbor_data;
+    i++;
   }
 }
 
